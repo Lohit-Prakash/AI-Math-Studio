@@ -1,15 +1,19 @@
+
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Calculator, Send, Sparkles, History, Trash2, ChevronRight, 
   ArrowRight, Info, Box, RotateCcw, Loader2, AlertCircle,
   Atom, Shapes, TrendingUp, Edit, Check, X, Code, Variable, Brain, 
-  RefreshCw, Shuffle, AlertTriangle, FlaskConical, Sigma, Wrench
+  RefreshCw, Shuffle, AlertTriangle, FlaskConical, Sigma, Wrench, StopCircle,
+  Camera, Image as ImageIcon, Copy, FileCode, MessageSquare
 } from 'lucide-react';
-import { generateFormula, generateExplanation, syncFormula } from './services/gemini';
+import { generateFormula, generateExplanation, syncFormula, generateCodeSnippets, sendChatMessage } from './services/gemini';
 import { Visualizer } from './components/Visualizer';
 import { InputSection } from './components/InputSection';
 import { safeEvaluate } from './utils/math';
-import { FormulaData, CalculationResult, ExplanationData, HistoryItem } from './types';
+import { FormulaData, CalculationResult, ExplanationData, HistoryItem, ChatMessage } from './types';
+import { HomePage } from './components/HomePage';
 
 // Latex rendering URL - Simplified for robustness
 const getLatexUrl = (formula: string) => {
@@ -69,7 +73,7 @@ const SuggestionCategory = ({ icon: Icon, title, items, onSelect }: any) => (
         <button
           key={item}
           onClick={(e) => { e.stopPropagation(); onSelect(item); }}
-          className="text-xs bg-slate-950 text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded-md border border-slate-800 hover:border-cyan-500/50 transition-all"
+          className="text-xs bg-slate-950 text-slate-400 hover:text-cyan-300 px-3 py-1.5 rounded-md border border-slate-800 hover:border-cyan-500/50 transition-all text-left"
         >
           {item}
         </button>
@@ -90,6 +94,8 @@ const surpriseQueries = [
 ];
 
 const App: React.FC = () => {
+  const [view, setView] = useState<'home' | 'app'>('home');
+
   const [query, setQuery] = useState('');
   const [useThinking, setUseThinking] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -104,6 +110,18 @@ const App: React.FC = () => {
   // Explanation state
   const [explanation, setExplanation] = useState<ExplanationData | null>(null);
   const [isExplaining, setIsExplaining] = useState(false);
+
+  // Chat / Tutor State
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Export/Code View State
+  const [isExporting, setIsExporting] = useState(false);
+  const [codeSnippets, setCodeSnippets] = useState<{ python: string; excel: string; matlab: string } | null>(null);
+  const [showCodeModal, setShowCodeModal] = useState(false);
+  const [activeCodeTab, setActiveCodeTab] = useState<'python' | 'excel' | 'matlab'>('python');
 
   // History
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -127,7 +145,18 @@ const App: React.FC = () => {
   // Syncing State
   const [isSyncing, setIsSyncing] = useState(false);
   const [activeEditField, setActiveEditField] = useState<'latex' | 'js' | null>(null);
-  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Loading Cancellation
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Image Upload State
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null); // Base64 data for preview
+  const [imageFile, setImageFile] = useState<File | null>(null);
+
+  // Result Copy State
+  const [isCopied, setIsCopied] = useState(false);
 
   // Calculate result whenever inputs or formula change
   useEffect(() => {
@@ -149,6 +178,8 @@ const App: React.FC = () => {
 
       // Reset explanation when inputs change significantly
       setExplanation(null);
+      // Reset code snippets if formula changes completely (simple check via title)
+      if (codeSnippets && !showCodeModal) setCodeSnippets(null);
     }
   }, [inputs, formula]);
 
@@ -166,9 +197,60 @@ const App: React.FC = () => {
     }
   }, [editState.js, inputs, isEditing]);
 
+  // Auto-scroll chat
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages]);
+
+  const cancelGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsLoading(false);
+      setLoadingStage('');
+    }
+  };
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setImageFile(file);
+      // Create preview
+      const reader = new FileReader();
+      reader.onload = (ev) => setSelectedImage(ev.target?.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const clearImage = () => {
+    setSelectedImage(null);
+    setImageFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove data:image/xxx;base64, prefix
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = error => reject(error);
+    });
+  };
+
   const handleGenerate = async (forcedQuery?: string) => {
     const q = forcedQuery || query;
-    if (!q.trim()) return;
+    // Allow empty query if image is present
+    if (!q.trim() && !imageFile) return;
+    
+    // Setup Cancellation
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+    abortControllerRef.current = new AbortController();
     
     setIsLoading(true);
     setLoadingStage(useThinking ? 'Deep thinking initiated...' : 'Analyzing request...');
@@ -176,11 +258,13 @@ const App: React.FC = () => {
     setErrorDetail(null);
     setFormula(null);
     setExplanation(null);
+    setCodeSnippets(null);
+    setChatMessages([]); // Reset chat history for new formula
     setShowGhost(false);
     setIsEditing(false);
 
     // Sequential loading messages
-    const timers: NodeJS.Timeout[] = [];
+    const timers: ReturnType<typeof setTimeout>[] = [];
     const stages = useThinking ? [
       { t: 1000, msg: 'Analyzing complex mathematical structures...' },
       { t: 4000, msg: 'Reasoning about visualization strategy...' },
@@ -196,7 +280,21 @@ const App: React.FC = () => {
     });
 
     try {
-      const data = await generateFormula(q, useThinking);
+      let imageData = undefined;
+      if (imageFile) {
+        setLoadingStage('Analyzing image data...');
+        const base64 = await fileToBase64(imageFile);
+        imageData = {
+          data: base64,
+          mimeType: imageFile.type
+        };
+      }
+
+      const data = await generateFormula(q, useThinking, imageData);
+      
+      // Check if cancelled during await
+      if (abortControllerRef.current?.signal.aborted) return;
+
       setFormula(data);
       
       // Initialize inputs
@@ -206,7 +304,13 @@ const App: React.FC = () => {
       });
       setInputs(initialInputs);
       setQuery(q); // Update input if triggered via suggestion
+      
+      // Clear image after successful generation
+      if (imageFile) clearImage();
+
     } catch (err: any) {
+      if (abortControllerRef.current?.signal.aborted) return;
+      
       console.error(err);
       const errStr = err.toString().toLowerCase();
       let msg = "Generation Failed";
@@ -233,7 +337,9 @@ const App: React.FC = () => {
       setErrorDetail(detail);
     } finally {
       timers.forEach(clearTimeout);
-      setIsLoading(false);
+      if (!abortControllerRef.current?.signal.aborted) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -256,6 +362,63 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSendChat = async () => {
+    if (!chatInput.trim() || !formula || !result) return;
+    
+    const userMsg = chatInput;
+    setChatInput('');
+    setIsChatLoading(true);
+    
+    // Optimistic UI update
+    const newHistory: ChatMessage[] = [
+      ...chatMessages, 
+      { role: 'user', text: userMsg }
+    ];
+    setChatMessages(newHistory);
+
+    try {
+      const responseText = await sendChatMessage(
+        chatMessages, 
+        userMsg, 
+        {
+          formulaTitle: formula.title,
+          displayFormula: formula.displayFormula,
+          inputs: inputs,
+          result: result.value
+        }
+      );
+      
+      setChatMessages([...newHistory, { role: 'model', text: responseText }]);
+    } catch (err) {
+      console.error(err);
+      setChatMessages([...newHistory, { role: 'model', text: "Sorry, I encountered an error responding to that." }]);
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  const handleExportCode = async () => {
+    if (!formula) return;
+    
+    // If we already have snippets, just open the modal
+    if (codeSnippets) {
+      setShowCodeModal(true);
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      const variableNames = formula.inputs.map(i => i.symbol);
+      const snippets = await generateCodeSnippets(formula.title, formula.jsFormula, variableNames);
+      setCodeSnippets(snippets);
+      setShowCodeModal(true);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const saveToHistory = () => {
     if (formula && result) {
       setHistory(prev => [{
@@ -266,6 +429,18 @@ const App: React.FC = () => {
         result: { ...result },
         displayFormula: formula.displayFormula
       }, ...prev]);
+    }
+  };
+
+  const handleCopyResult = () => {
+    if (result && formula) {
+      const val = typeof result.value === 'number' 
+        ? result.value.toLocaleString(undefined, { maximumFractionDigits: 4 }) 
+        : result.value;
+      const textToCopy = `${val} ${formula.resultUnit || ''}`.trim();
+      navigator.clipboard.writeText(textToCopy);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
     }
   };
 
@@ -334,8 +509,14 @@ const App: React.FC = () => {
     }, 2000);
   };
 
+  // --- Router View ---
+  if (view === 'home') {
+    return <HomePage onLaunch={() => setView('app')} />;
+  }
+
+  // --- Main App View ---
   return (
-    <div className="min-h-screen flex flex-col md:flex-row overflow-hidden font-sans">
+    <div className="min-h-screen flex flex-col md:flex-row overflow-hidden font-sans relative">
       
       {/* Background Effects */}
       <div className="fixed inset-0 pointer-events-none z-0">
@@ -343,12 +524,60 @@ const App: React.FC = () => {
         <div className="absolute bottom-[-20%] right-[-10%] w-[50vw] h-[50vw] bg-cyan-900/20 rounded-full blur-[120px]" />
       </div>
 
+      {/* Code Export Modal */}
+      {showCodeModal && codeSnippets && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+             <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+               <div className="flex items-center gap-2">
+                 <FileCode className="w-5 h-5 text-cyan-400" />
+                 <h3 className="font-semibold text-white">Export Logic</h3>
+               </div>
+               <button onClick={() => setShowCodeModal(false)} className="text-slate-500 hover:text-white transition-colors">
+                 <X className="w-5 h-5" />
+               </button>
+             </div>
+             <div className="flex border-b border-slate-800">
+                {(['python', 'excel', 'matlab'] as const).map(lang => (
+                  <button
+                    key={lang}
+                    onClick={() => setActiveCodeTab(lang)}
+                    className={`flex-1 py-3 text-sm font-medium transition-colors ${
+                      activeCodeTab === lang 
+                        ? 'bg-slate-800 text-cyan-400 border-b-2 border-cyan-400' 
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                    }`}
+                  >
+                    {lang.charAt(0).toUpperCase() + lang.slice(1)}
+                  </button>
+                ))}
+             </div>
+             <div className="flex-1 overflow-auto p-0 bg-slate-950 group">
+               <pre className="p-6 text-sm font-mono text-slate-300 leading-relaxed overflow-x-auto whitespace-pre-wrap">
+                 {codeSnippets[activeCodeTab]}
+               </pre>
+             </div>
+             <div className="p-4 border-t border-slate-800 bg-slate-900 flex justify-end">
+               <button 
+                 onClick={() => {
+                   navigator.clipboard.writeText(codeSnippets[activeCodeTab]);
+                   // Visual feedback could be added here
+                 }}
+                 className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm font-medium transition-colors"
+               >
+                 <Copy className="w-4 h-4" /> Copy Snippet
+               </button>
+             </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-screen relative z-10">
         
         {/* Header */}
         <header className="flex-none p-6 border-b border-slate-800/50 bg-slate-950/80 backdrop-blur-xl flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('home')}>
             <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-cyan-500/20">
               <Calculator className="text-white w-6 h-6" />
             </div>
@@ -393,12 +622,37 @@ const App: React.FC = () => {
                   <Brain className={`w-5 h-5 ${useThinking ? 'animate-pulse' : ''}`} />
                 </button>
 
+                {/* Snap & Solve (Camera) Button */}
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  onChange={handleImageSelect} 
+                  accept="image/*"
+                  capture="environment" 
+                  className="hidden" 
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`p-2.5 rounded-xl transition-all mr-2 flex items-center gap-2 ${
+                    selectedImage 
+                      ? 'bg-indigo-600/20 text-indigo-400 ring-1 ring-indigo-500/50' 
+                      : 'bg-slate-800/50 text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+                  }`}
+                  title="Snap & Solve (Upload Image)"
+                >
+                  <Camera className="w-5 h-5" />
+                </button>
+
                 <input 
                   type="text" 
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleGenerate()}
-                  placeholder={useThinking ? "Ask a complex problem..." : "What do you want to calculate?"}
+                  placeholder={
+                    selectedImage 
+                      ? "Describe the problem in the image (optional)..." 
+                      : (useThinking ? "Ask a complex problem..." : "What do you want to calculate?")
+                  }
                   className="flex-1 bg-transparent border-none outline-none text-lg text-white px-2 py-2 placeholder:text-slate-500 font-light min-w-0"
                 />
 
@@ -415,7 +669,7 @@ const App: React.FC = () => {
 
                   <button 
                     onClick={() => handleGenerate()}
-                    disabled={isLoading || !query}
+                    disabled={isLoading || (!query && !selectedImage)}
                     className={`${
                       useThinking 
                         ? 'bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 text-white' 
@@ -438,9 +692,30 @@ const App: React.FC = () => {
               </div>
             </div>
 
+            {/* Image Preview Card */}
+            {selectedImage && (
+              <div className="max-w-sm mx-auto animate-slide-up relative group">
+                 <div className="absolute inset-0 bg-indigo-500/20 rounded-xl blur-lg group-hover:bg-indigo-500/30 transition-all"></div>
+                 <div className="relative bg-slate-900 border border-indigo-500/30 rounded-xl p-3 flex items-center gap-4 shadow-xl">
+                    <img src={selectedImage} alt="Selected" className="w-16 h-16 object-cover rounded-lg border border-slate-700" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-white truncate">Image Attached</div>
+                      <div className="text-xs text-slate-400 truncate">{imageFile?.name}</div>
+                    </div>
+                    <button 
+                      onClick={clearImage}
+                      className="p-2 hover:bg-red-500/10 text-slate-500 hover:text-red-400 rounded-lg transition-colors"
+                      title="Remove Image"
+                    >
+                       <X className="w-5 h-5" />
+                    </button>
+                 </div>
+              </div>
+            )}
+
             {/* Enhanced Loading Indicator */}
             {isLoading && (
-              <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-fade-in">
+              <div className="flex flex-col items-center justify-center py-8 space-y-6 animate-fade-in relative z-10">
                  <div className="relative">
                     <div className={`absolute inset-0 blur-xl rounded-full ${useThinking ? 'bg-pink-500/20' : 'bg-cyan-500/20'}`}></div>
                     <div className={`relative flex items-center gap-3 bg-slate-900 border px-6 py-3 rounded-2xl shadow-2xl ${
@@ -456,10 +731,20 @@ const App: React.FC = () => {
                         </span>
                     </div>
                  </div>
-                 {/* Progress bar simulation */}
-                 <div className="w-64 h-1 bg-slate-800 rounded-full overflow-hidden">
+                 
+                 {/* Visual Progress Bar */}
+                 <div className="w-64 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                     <div className={`h-full rounded-full animate-[loading_2s_ease-in-out_infinite] ${useThinking ? 'bg-pink-500' : 'bg-cyan-500'}`} style={{ width: '50%' }}></div>
                  </div>
+                 
+                 {/* Cancel Button */}
+                 <button 
+                   onClick={cancelGeneration}
+                   className="text-xs text-slate-500 hover:text-red-400 transition-colors flex items-center gap-1"
+                 >
+                   <StopCircle className="w-3 h-3" /> Stop Generating
+                 </button>
+
                  <style>{`
                     @keyframes loading {
                         0% { transform: translateX(-100%); }
@@ -497,7 +782,7 @@ const App: React.FC = () => {
                   </div>
                   <h2 className="text-xl font-semibold text-white">Ready to Calculate</h2>
                   <p className="text-slate-400 max-w-md mx-auto">
-                    Describe any mathematical, physical, or financial concept, and AI will generate a fully interactive model.
+                    Describe any mathematical, physical, or financial concept, or upload an image of a problem, and AI will generate a fully interactive model.
                   </p>
                 </div>
 
@@ -505,37 +790,37 @@ const App: React.FC = () => {
                   <SuggestionCategory 
                     icon={Atom} 
                     title="Physics" 
-                    items={['Projectile Motion', 'Kinetic Energy', 'Snell\'s Law']} 
+                    items={['Projectile Motion', 'Kinetic Energy', 'Snell\'s Law', 'Doppler Effect']} 
                     onSelect={(q: string) => { setQuery(q); handleGenerate(q); }}
                   />
                   <SuggestionCategory 
                     icon={Shapes} 
                     title="Geometry" 
-                    items={['Volume of a Cone', 'Area of Ellipse', 'Pythagorean Theorem']} 
+                    items={['Volume of a Cone', 'Area of Ellipse', 'Pythagorean Theorem', 'Distance Formula']} 
                     onSelect={(q: string) => { setQuery(q); handleGenerate(q); }}
                   />
                   <SuggestionCategory 
                     icon={TrendingUp} 
                     title="Finance" 
-                    items={['Compound Interest', 'Mortgage Payment', 'ROI Calculator']} 
+                    items={['Compound Interest', 'Mortgage Payment', 'ROI Calculator', 'Break-even Point']} 
                     onSelect={(q: string) => { setQuery(q); handleGenerate(q); }}
                   />
                   <SuggestionCategory 
                     icon={Wrench} 
                     title="Engineering" 
-                    items={['Beam Deflection', 'Ohm\'s Law', 'Stress & Strain']} 
+                    items={['Beam Deflection', 'Ohm\'s Law', 'Stress & Strain', 'Heat Transfer']} 
                     onSelect={(q: string) => { setQuery(q); handleGenerate(q); }}
                   />
                   <SuggestionCategory 
                     icon={FlaskConical} 
                     title="Chemistry" 
-                    items={['Ideal Gas Law', 'pH Calculation', 'Molarity']} 
+                    items={['Ideal Gas Law', 'pH Calculation', 'Molarity', 'Half-Life']} 
                     onSelect={(q: string) => { setQuery(q); handleGenerate(q); }}
                   />
                   <SuggestionCategory 
                     icon={Sigma} 
                     title="Algebra" 
-                    items={['Quadratic Formula', 'Logarithms', 'System of Equations']} 
+                    items={['Quadratic Formula', 'Logarithms', 'System of Equations', 'Factorials']} 
                     onSelect={(q: string) => { setQuery(q); handleGenerate(q); }}
                   />
                 </div>
@@ -695,16 +980,38 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-4 w-full md:w-auto">
                       <div className="text-right">
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-1">Result</div>
-                        <div className="text-3xl md:text-4xl font-mono font-bold text-cyan-400 break-all">
-                          {typeof result?.value === 'number' 
-                            ? result.value.toLocaleString(undefined, { maximumFractionDigits: 4 }) 
-                            : (result?.value || "...")}
-                          <span className="text-lg text-slate-500 ml-2">{formula.resultUnit}</span>
+                        <div className="flex items-center gap-3">
+                          <div className="text-3xl md:text-4xl font-mono font-bold text-cyan-400 break-all">
+                            {typeof result?.value === 'number' 
+                              ? result.value.toLocaleString(undefined, { maximumFractionDigits: 4 }) 
+                              : (result?.value || "...")}
+                            <span className="text-lg text-slate-500 ml-2">{formula.resultUnit}</span>
+                          </div>
+                          
+                          {/* Copy Button */}
+                          <button 
+                            onClick={handleCopyResult}
+                            className={`p-2 rounded-lg transition-all ${isCopied ? 'bg-green-500/10 text-green-400' : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white'}`}
+                            title="Copy Result"
+                          >
+                             {isCopied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                          </button>
                         </div>
                       </div>
                     </div>
                     
                     <div className="flex gap-3 w-full md:w-auto">
+                       {/* Code Export Button */}
+                       <button 
+                        onClick={handleExportCode}
+                        disabled={isExporting}
+                        className="flex-1 md:flex-none bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-all border border-slate-700/50"
+                        title="Export to Code"
+                       >
+                         {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCode className="w-4 h-4" />}
+                         <span>Code</span>
+                       </button>
+
                        <button 
                         onClick={handleExplain}
                         disabled={isExplaining}
@@ -776,6 +1083,68 @@ const App: React.FC = () => {
                           ))}
                         </div>
                       </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Chat Bot / AI Tutor Interface */}
+                {formula && (
+                  <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 md:p-6 animate-fade-in">
+                    <div className="flex items-center gap-2 mb-4">
+                      <MessageSquare className="w-5 h-5 text-indigo-400" />
+                      <h3 className="text-lg font-semibold text-white">Ask the AI Tutor</h3>
+                    </div>
+                    
+                    {/* Chat Window */}
+                    <div className="bg-slate-950 border border-slate-800 rounded-xl h-64 overflow-y-auto custom-scrollbar p-4 mb-4 space-y-4">
+                      {chatMessages.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2">
+                           <Brain className="w-8 h-8 opacity-20" />
+                           <p className="text-sm">Ask any question about this formula...</p>
+                        </div>
+                      ) : (
+                        chatMessages.map((msg, idx) => (
+                          <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                              msg.role === 'user' 
+                                ? 'bg-indigo-600 text-white rounded-tr-sm' 
+                                : 'bg-slate-800 text-slate-300 rounded-tl-sm border border-slate-700'
+                            }`}>
+                              {msg.text}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      {isChatLoading && (
+                        <div className="flex justify-start">
+                          <div className="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3 flex gap-1">
+                            <div className="w-2 h-2 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0s' }}></div>
+                            <div className="w-2 h-2 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0.15s' }}></div>
+                            <div className="w-2 h-2 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
+                          </div>
+                        </div>
+                      )}
+                      <div ref={chatEndRef} />
+                    </div>
+
+                    {/* Chat Input */}
+                    <div className="flex gap-2 relative">
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
+                        placeholder="Why is it squared? What happens if..."
+                        className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-indigo-500 focus:outline-none placeholder:text-slate-600"
+                        disabled={isChatLoading}
+                      />
+                      <button 
+                        onClick={handleSendChat}
+                        disabled={!chatInput.trim() || isChatLoading}
+                        className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white p-3 rounded-xl transition-colors"
+                      >
+                        <Send className="w-5 h-5" />
+                      </button>
                     </div>
                   </div>
                 )}

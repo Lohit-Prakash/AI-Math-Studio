@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { ZoomIn, ZoomOut, RotateCcw, Move, MousePointer2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Move, MousePointer2, Eye, EyeOff } from 'lucide-react';
 import { FormulaData } from '../types';
 import { safeEvaluate, generateGraphPoints } from '../utils/math';
 
@@ -22,8 +22,12 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
   // --- SVG State ---
   const [svgTransform, setSvgTransform] = useState({ x: 0, y: 0, k: 1 });
   const [isSvgDragging, setIsSvgDragging] = useState(false);
+  const [isPanModeEnabled, setIsPanModeEnabled] = useState(false);
   const svgDragStartRef = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
   const [svgMouse, setSvgMouse] = useState<{ x: number; y: number } | null>(null);
+  
+  // Shared State
+  const [showCoordinates, setShowCoordinates] = useState(false);
 
   // Reset states when formula changes
   useEffect(() => {
@@ -43,14 +47,17 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
 
   const onSvgMouseDown = (e: React.MouseEvent) => {
     if (isGhost) return;
-    e.preventDefault();
-    setIsSvgDragging(true);
-    svgDragStartRef.current = { 
-        clientX: e.clientX, 
-        clientY: e.clientY, 
-        x: svgTransform.x, 
-        y: svgTransform.y 
-    };
+    // Only drag if Pan Mode is enabled or Middle Mouse button is used
+    if (isPanModeEnabled || e.button === 1) {
+      e.preventDefault();
+      setIsSvgDragging(true);
+      svgDragStartRef.current = { 
+          clientX: e.clientX, 
+          clientY: e.clientY, 
+          x: svgTransform.x, 
+          y: svgTransform.y 
+      };
+    }
   };
 
   const onSvgWheel = (e: React.WheelEvent) => {
@@ -60,7 +67,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
     const direction = e.deltaY > 0 ? -1 : 1; 
     const factor = 1 + (direction * zoomIntensity);
     
-    // Simple zoom
+    // Simple zoom logic
     setSvgTransform(prev => ({ 
       ...prev, 
       k: Math.min(Math.max(prev.k * factor, 0.1), 10) 
@@ -68,21 +75,15 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
   };
 
   const onSvgMouseMove = (e: React.MouseEvent) => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !showCoordinates) return;
     
-    // Calculate SVG Coordinates for Tooltip
-    // We assume the inner div is centered, but transformed.
-    // A simpler approximation for 400x300 viewBox centered in container:
     const rect = containerRef.current.getBoundingClientRect();
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
     
-    // Mouse relative to center of container
     const mx = e.clientX - rect.left - centerX;
     const my = e.clientY - rect.top - centerY;
 
-    // Adjust for transform
-    // svg_x_centered = (mx - tx) / k
     const svgXCentered = (mx - svgTransform.x) / svgTransform.k;
     const svgYCentered = (my - svgTransform.y) / svgTransform.k;
 
@@ -140,9 +141,9 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
 
   // --- Common UI Components ---
 
-  const ControlsOverlay = ({ onZoomIn, onZoomOut, onReset, isDraggingMode }: any) => (
+  const ControlsOverlay = ({ onZoomIn, onZoomOut, onReset, isDraggingMode, onTogglePan, showCoordsToggle, onToggleCoords, coordsVisible }: any) => (
     !isGhost && (
-      <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/50 shadow-2xl">
+      <div className="absolute top-4 right-4 z-20 flex flex-col gap-2 bg-slate-950/80 backdrop-blur-md p-1.5 rounded-xl border border-slate-700/50 shadow-2xl">
         <button onClick={onZoomIn} className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-800 rounded-lg transition-colors" title="Zoom In">
           <ZoomIn className="w-4 h-4" />
         </button>
@@ -153,9 +154,22 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
           <RotateCcw className="w-4 h-4" />
         </button>
         <div className="h-px bg-slate-700/50 my-1"></div>
-        <div className={`p-2 ${isDraggingMode ? 'text-cyan-400 bg-slate-800' : 'text-slate-500'} cursor-grab active:cursor-grabbing rounded-lg`} title="Pan (Drag to move)">
+        <button 
+          onClick={onTogglePan} 
+          className={`p-2 ${isDraggingMode ? 'text-cyan-400 bg-slate-800 ring-1 ring-cyan-500/50' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'} rounded-lg transition-all`} 
+          title="Toggle Pan Mode"
+        >
           <Move className="w-4 h-4" />
-        </div>
+        </button>
+        {showCoordsToggle && (
+            <button 
+            onClick={onToggleCoords} 
+            className={`p-2 ${coordsVisible ? 'text-cyan-400 bg-slate-800 ring-1 ring-cyan-500/50' : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'} rounded-lg transition-all`} 
+            title="Toggle Coordinates"
+          >
+            {coordsVisible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+          </button>
+        )}
       </div>
     )
   );
@@ -179,14 +193,31 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
     svg = svg.replace(/{{result}}/g, String(result));
 
     const visibilityStyles = `
-      svg text, svg tspan { fill: #e2e8f0 !important; font-family: 'Inter', sans-serif; font-weight: 500; opacity: 1 !important; }
+      svg { width: 100%; height: 100%; overflow: visible; }
+      svg text, svg tspan { 
+        fill: #e2e8f0 !important; 
+        font-family: 'Inter', sans-serif; 
+        font-weight: 500; 
+        opacity: 1 !important; 
+        text-rendering: optimizeLegibility;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5); 
+      }
+      
+      /* Fix invisible blacks */
       svg [stroke="#000"], svg [stroke="#000000"], svg [stroke="black"], svg [stroke="rgb(0,0,0)"] { stroke: #22d3ee !important; }
       svg [fill="#000"], svg [fill="#000000"], svg [fill="black"], svg [fill="rgb(0,0,0)"] { fill: #22d3ee !important; fill-opacity: 0.2 !important; }
+      
+      /* Default styling for unstyled shapes */
       :is(svg path, svg rect, svg circle, svg ellipse, svg polygon):not([fill]):not([stroke]):not([style*="fill"]):not([style*="stroke"]) {
          fill: #22d3ee !important; fill-opacity: 0.2 !important; stroke: #22d3ee !important; stroke-width: 2px !important;
       }
       svg line:not([stroke]):not([style*="stroke"]) { stroke: #22d3ee !important; stroke-width: 2px !important; }
-      svg marker path { fill: #22d3ee !important; stroke: none !important; }
+      
+      /* Optimization & Precision */
+      svg path, svg rect, svg circle, svg ellipse, svg polygon, svg line {
+        vector-effect: non-scaling-stroke;
+        shape-rendering: geometricPrecision;
+      }
     `;
 
     if (isGhost) {
@@ -197,7 +228,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
                .replace(/<animateMotion[\s\S]*?>[\s\S]*?<\/animateMotion>/g, '');
       
       // Unified visibility for Ghost too, just dashed
-      svg = svg.replace(/<\/svg>/i, `<style>${visibilityStyles} svg * { animation: none !important; transition: none !important; stroke-dasharray: 4 4 !important; }</style></svg>`);
+      svg = svg.replace(/<\/svg>/i, `<style>${visibilityStyles} svg * { animation: none !important; transition: none !important; stroke-dasharray: 4 4 !important; opacity: 0.6; }</style></svg>`);
     } else {
       svg = svg.replace(/<\/svg>/i, `<style>${visibilityStyles}</style></svg>`);
     }
@@ -210,7 +241,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
     return (
       <div 
         ref={containerRef}
-        className={`w-full h-full relative overflow-hidden ${isSvgDragging ? 'cursor-grabbing' : 'cursor-crosshair'} ${isGhost ? 'pointer-events-none opacity-40' : ''}`}
+        className={`w-full h-full relative overflow-hidden ${isPanModeEnabled ? (isSvgDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'} ${isGhost ? 'pointer-events-none opacity-40' : ''}`}
         onMouseDown={onSvgMouseDown}
         onWheel={onSvgWheel}
         onMouseMove={onSvgMouseMove}
@@ -220,11 +251,15 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
             onZoomIn={() => handleSvgZoom(1.2)} 
             onZoomOut={() => handleSvgZoom(0.8)} 
             onReset={handleSvgReset}
-            isDraggingMode={isSvgDragging}
+            isDraggingMode={isPanModeEnabled}
+            onTogglePan={() => setIsPanModeEnabled(!isPanModeEnabled)}
+            showCoordsToggle={true}
+            coordsVisible={showCoordinates}
+            onToggleCoords={() => setShowCoordinates(!showCoordinates)}
          />
          
          {/* SVG Tooltip */}
-         {svgMouse && !isGhost && !isSvgDragging && (
+         {svgMouse && !isGhost && showCoordinates && (
             <div 
               className="absolute z-30 pointer-events-none bg-slate-950/95 border border-slate-700/80 px-3 py-2 rounded-lg shadow-2xl backdrop-blur-md ring-1 ring-white/10"
               style={{ 
@@ -289,13 +324,16 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
       const range = xMax - xMin;
       const center = (xMin + xMax) / 2;
       const newRange = range * factor;
+      if (newRange < 1e-6) return; // Prevent collapse
       setCustomDomain({ min: center - newRange / 2, max: center + newRange / 2 });
     };
 
     const onGraphMouseDown = (e: React.MouseEvent) => {
       if (isGhost) return;
-      setIsGraphDragging(true);
-      graphDragStartRef.current = { x: e.clientX, min: xMin, max: xMax };
+      if (isPanModeEnabled) {
+          setIsGraphDragging(true);
+          graphDragStartRef.current = { x: e.clientX, min: xMin, max: xMax };
+      }
     };
 
     const onGraphWheel = (e: React.WheelEvent) => {
@@ -311,6 +349,8 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
       const currentRange = xMax - xMin;
       const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
       const newRange = currentRange * zoomFactor;
+      if (newRange < 1e-6) return;
+
       const cursorValue = xMin + (ratio * currentRange);
       const newMin = cursorValue - (ratio * newRange);
       const newMax = newMin + newRange;
@@ -322,7 +362,7 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
     return (
       <div 
         ref={containerRef}
-        className={`w-full h-full relative select-none ${isGraphDragging ? 'cursor-grabbing' : 'cursor-crosshair'} ${isGhost ? 'opacity-30 grayscale pointer-events-none' : ''}`}
+        className={`w-full h-full relative select-none ${isPanModeEnabled ? (isGraphDragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'} ${isGhost ? 'opacity-30 grayscale pointer-events-none' : ''}`}
         onMouseDown={onGraphMouseDown}
         onWheel={onGraphWheel}
       >
@@ -330,7 +370,11 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
           onZoomIn={() => handleGraphZoom(0.8)} 
           onZoomOut={() => handleGraphZoom(1.25)} 
           onReset={() => setCustomDomain(null)}
-          isDraggingMode={isGraphDragging}
+          isDraggingMode={isPanModeEnabled}
+          onTogglePan={() => setIsPanModeEnabled(!isPanModeEnabled)}
+          showCoordsToggle={true}
+          coordsVisible={showCoordinates}
+          onToggleCoords={() => setShowCoordinates(!showCoordinates)}
         />
 
         <ResponsiveContainer width="100%" height="100%">
@@ -349,34 +393,37 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
               fontSize={10} tickLine={false} axisLine={false} domain={[xMin, xMax]} type="number" allowDataOverflow
             />
             <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false} width={40} domain={['auto', 'auto']} />
-            <Tooltip 
-              cursor={{ stroke: '#fbbf24', strokeWidth: 1, strokeDasharray: '4 4' }}
-              content={({ active, payload, label }) => {
-                if (active && payload && payload.length) {
-                  const x = Number(label);
-                  const y = Number(payload[0].value);
-                  return (
-                    <div className="bg-slate-950/95 border border-slate-700/80 px-3 py-2 rounded-lg shadow-2xl backdrop-blur-md ring-1 ring-white/10">
-                      <div className="flex items-center gap-2 mb-1 border-b border-slate-800 pb-1">
-                         <MousePointer2 className="w-3 h-3 text-slate-500" />
-                         <span className="text-xs font-mono text-slate-300 font-bold">Coordinates</span>
-                      </div>
-                      <div className="font-mono text-xs space-y-0.5">
-                        <div className="flex justify-between gap-4">
-                          <span className="text-slate-500">x:</span>
-                          <span className="text-slate-200">{x.toFixed(2)}</span>
+            
+            {showCoordinates && (
+              <Tooltip 
+                cursor={{ stroke: '#fbbf24', strokeWidth: 1, strokeDasharray: '4 4' }}
+                content={({ active, payload, label }) => {
+                  if (active && payload && payload.length) {
+                    const x = Number(label);
+                    const y = Number(payload[0].value);
+                    return (
+                      <div className="bg-slate-950/95 border border-slate-700/80 px-3 py-2 rounded-lg shadow-2xl backdrop-blur-md ring-1 ring-white/10">
+                        <div className="flex items-center gap-2 mb-1 border-b border-slate-800 pb-1">
+                           <MousePointer2 className="w-3 h-3 text-slate-500" />
+                           <span className="text-xs font-mono text-slate-300 font-bold">Coordinates</span>
                         </div>
-                        <div className="flex justify-between gap-4">
-                          <span className="text-slate-500">y:</span>
-                          <span className="text-cyan-400 font-bold">{y.toFixed(3)}</span>
+                        <div className="font-mono text-xs space-y-0.5">
+                          <div className="flex justify-between gap-4">
+                            <span className="text-slate-500">x:</span>
+                            <span className="text-slate-200">{x.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between gap-4">
+                            <span className="text-slate-500">y:</span>
+                            <span className="text-cyan-400 font-bold">{y.toFixed(3)}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                }
-                return null;
-              }}
-            />
+                    );
+                  }
+                  return null;
+                }}
+              />
+            )}
             <Area type="monotone" dataKey="y" stroke="#22d3ee" strokeWidth={2} fillOpacity={1} fill="url(#colorY)" isAnimationActive={false} />
             {!isGhost && currentXValue >= xMin && currentXValue <= xMax && (
               <ReferenceLine x={currentXValue} stroke="#ef4444" strokeDasharray="3 3" />

@@ -1,5 +1,7 @@
 {
   "name": "Copy of AI Math Studio",
   "description": "A professional-grade, AI-powered mathematical engine that visualizes formulas, solves complex problems, and provides deep insights using Google Gemini.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "camera"
+  ]
 }

@@ -1,3 +1,4 @@
+
 export interface InputParam {
   symbol: string;
   label: string;
@@ -46,4 +47,9 @@ export interface HistoryItem {
   inputs: Record<string, number>;
   result: CalculationResult;
   displayFormula: string;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'model';
+  text: string;
 }
