@@ -186,49 +186,60 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
       const decodedExpr = cleanExpr.replace(/&lt;/g, '<').replace(/&gt;/g, '>');
       const val = safeEvaluate(decodedExpr, values);
       if (typeof val === 'number' && isFinite(val)) return String(parseFloat(val.toFixed(4)));
-      if (typeof val === 'string') return val;
+      if (typeof val === 'string') return val; // Support color strings or paths
       return match; 
     });
     
     svg = svg.replace(/{{result}}/g, String(result));
 
+    // Advanced CSS injection for rendering fidelity and accessibility
     const visibilityStyles = `
       svg { width: 100%; height: 100%; overflow: visible; }
+      
+      /* Typography */
       svg text, svg tspan { 
-        fill: #e2e8f0 !important; 
+        fill: #f1f5f9 !important; /* Slate-100 */
         font-family: 'Inter', sans-serif; 
         font-weight: 500; 
         opacity: 1 !important; 
         text-rendering: optimizeLegibility;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.5); 
+        text-shadow: 0 1px 2px rgba(0,0,0,0.8); /* readable on any bg */
       }
       
-      /* Fix invisible blacks */
+      /* Animation Mechanics */
+      svg * { transform-box: fill-box; } /* Fix rotation origin issues */
+      
+      /* Rendering Optimizations */
+      svg path, svg rect, svg circle, svg ellipse, svg polygon, svg line {
+        vector-effect: non-scaling-stroke; /* Keep lines crisp when scaled */
+        shape-rendering: geometricPrecision;
+      }
+
+      /* Fix invisible blacks (Common AI default) */
+      /* Targeted rules to avoid overriding intentional fill="none" */
       svg [stroke="#000"], svg [stroke="#000000"], svg [stroke="black"], svg [stroke="rgb(0,0,0)"] { stroke: #22d3ee !important; }
       svg [fill="#000"], svg [fill="#000000"], svg [fill="black"], svg [fill="rgb(0,0,0)"] { fill: #22d3ee !important; fill-opacity: 0.2 !important; }
       
-      /* Default styling for unstyled shapes */
-      :is(svg path, svg rect, svg circle, svg ellipse, svg polygon):not([fill]):not([stroke]):not([style*="fill"]):not([style*="stroke"]) {
-         fill: #22d3ee !important; fill-opacity: 0.2 !important; stroke: #22d3ee !important; stroke-width: 2px !important;
-      }
-      svg line:not([stroke]):not([style*="stroke"]) { stroke: #22d3ee !important; stroke-width: 2px !important; }
-      
-      /* Optimization & Precision */
-      svg path, svg rect, svg circle, svg ellipse, svg polygon, svg line {
-        vector-effect: non-scaling-stroke;
-        shape-rendering: geometricPrecision;
+      /* Fallback for unstyled shapes to ensure visibility */
+      svg path:not([stroke]):not([fill]), 
+      svg rect:not([stroke]):not([fill]), 
+      svg circle:not([stroke]):not([fill]) {
+         stroke: #22d3ee !important; 
+         stroke-width: 2px !important;
+         fill: rgba(34, 211, 238, 0.1);
       }
     `;
 
     if (isGhost) {
+      // Strip animations for ghost mode
       svg = svg.replace(/<animate[\s\S]*?\/>/g, '')
                .replace(/<animateMotion[\s\S]*?\/>/g, '')
                .replace(/<animateTransform[\s\S]*?\/>/g, '')
                .replace(/<animate[\s\S]*?>[\s\S]*?<\/animate>/g, '')
                .replace(/<animateMotion[\s\S]*?>[\s\S]*?<\/animateMotion>/g, '');
       
-      // Unified visibility for Ghost too, just dashed
-      svg = svg.replace(/<\/svg>/i, `<style>${visibilityStyles} svg * { animation: none !important; transition: none !important; stroke-dasharray: 4 4 !important; opacity: 0.6; }</style></svg>`);
+      // Apply ghost styling: Dashed, Semi-transparent, but KEEP COLORS (Cyan/White)
+      svg = svg.replace(/<\/svg>/i, `<style>${visibilityStyles} svg * { animation: none !important; transition: none !important; stroke-dasharray: 4 4 !important; opacity: 0.5 !important; }</style></svg>`);
     } else {
       svg = svg.replace(/<\/svg>/i, `<style>${visibilityStyles}</style></svg>`);
     }
@@ -294,7 +305,6 @@ export const Visualizer: React.FC<VisualizerProps> = ({ formulaData, values, res
             <div 
                className="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full [&>svg]:max-w-full [&>svg]:max-h-full"
                dangerouslySetInnerHTML={{ __html: processedSvg }} 
-               style={{ shapeRendering: 'geometricPrecision' }}
             />
          </div>
       </div>

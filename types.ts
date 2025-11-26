@@ -40,16 +40,18 @@ export interface ExplanationData {
   relatedQueries: string[];
 }
 
+export interface ChatMessage {
+  role: 'user' | 'model';
+  text: string;
+}
+
 export interface HistoryItem {
   id: number;
   timestamp: number;
   title: string;
+  formulaData: FormulaData;
   inputs: Record<string, number>;
   result: CalculationResult;
-  displayFormula: string;
-}
-
-export interface ChatMessage {
-  role: 'user' | 'model';
-  text: string;
+  explanation: ExplanationData | null;
+  chatMessages: ChatMessage[];
 }

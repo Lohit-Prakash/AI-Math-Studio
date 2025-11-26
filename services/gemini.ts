@@ -106,12 +106,12 @@ export const generateFormula = async (
     
     2.  **Physics Accuracy**:
         - **Trajectory**: Use SMIL <animateMotion>. The 'path' attribute MUST be calculated using real physics (e.g. parabolas for projectiles).
-        - **Timing**: Use 'calcMode="spline"' and 'keySplines="0.42 0 0.58 1"' (ease-in-out) or specific bezier curves to simulate gravity/acceleration. Do NOT use linear timing for physical objects unless they have constant velocity.
+        - **Smooth Easing**: ALWAYS use 'calcMode="spline"' and 'keySplines="0.42 0 0.58 1"' (or similar) to simulate gravity/acceleration. Do NOT use linear timing for physical objects unless they have constant velocity.
         - **Duration**: Control animation speed using {{expression}}. Example: dur="{{10/v}}s". Higher velocity = lower duration.
     
-    3.  **Cyclic Animation**:
+    3.  **Cyclic Animation (CSS)**:
         - Use CSS Animations (@keyframes) inside a <style> tag.
-        - ALWAYS set 'transform-box: fill-box' and 'transform-origin: center' for rotating elements (wheels, gears) to ensure they spin around their own center, not the canvas origin.
+        - **CRITICAL**: ALWAYS set 'transform-box: fill-box' and 'transform-origin: center' for rotating elements (wheels, gears) to ensure they spin around their own center, not the canvas origin.
         - Use 'will-change: transform' for performance.
     
     4.  **Visual Consistency**:
@@ -122,11 +122,11 @@ export const generateFormula = async (
           - Axes/Guides: #475569 (Slate). Stroke-dasharray="4 4".
           - Text: #f1f5f9 (White/Slate).
           - **NEVER** use black fill/stroke. Use 'fill="none"' for outlines.
+          - **Dynamic Colors**: You can use conditional logic in {{}} for colors. Example: stroke="{{ v > 50 ? '#ef4444' : '#22d3ee' }}" (Red if fast, Cyan if slow).
     
     5.  **Dynamic Values**:
         - Use {{expression}} for attributes. Example: r="{{radius * 5}}".
         - Scale inputs to fit the 400x300 canvas. If input is 1000m, maybe map it to 300px.
-        - Use conditional logic for dynamic colors: stroke="{{ v > 50 ? '#ef4444' : '#22d3ee' }}".
 
     Visual Type Guidelines:
     - "geometry": Dynamic shapes (Circle, Triangle, Cone). Animate the dimension being calculated (e.g. radius growing).
@@ -189,6 +189,7 @@ export const generateExplanation = async (
     Result: ${result}
     
     Provide a practical interpretation, step-by-step breakdown, a fun insight, and related queries.
+    CRITICAL: For 'relatedQueries', provide the NAMES of related math formulas/calculators (e.g., "Potential Energy", "Force Calculator").
   `;
 
   const response = await ai.models.generateContent({
@@ -211,7 +212,8 @@ export const syncFormula = async (
   sourceType: 'latex' | 'js',
   variables: string[]
 ): Promise<string> => {
-  const model = "gemini-2.5-flash";
+  // Use 'gemini-2.5-flash-lite' for fast, low-latency syntax translation
+  const model = "gemini-2.5-flash-lite";
   const prompt = `
     Translate the following math formula to the Target Type.
     Source Type: ${sourceType}
@@ -239,7 +241,8 @@ export const generateCodeSnippets = async (
   jsFormula: string,
   inputs: string[]
 ): Promise<{ python: string; excel: string; matlab: string }> => {
-  const model = "gemini-2.5-flash";
+  // Use 'gemini-2.5-flash-lite' for fast code generation
+  const model = "gemini-2.5-flash-lite";
   const prompt = `
     Convert this JavaScript formula logic into Python, Excel, and MATLAB code snippets.
     Title: ${formulaTitle}
@@ -277,7 +280,8 @@ export const sendChatMessage = async (
     result: string | number;
   }
 ): Promise<string> => {
-  const model = "gemini-3-pro-preview";
+  // Use 'gemini-2.5-flash-lite' for low-latency, snappy chat interactions
+  const model = "gemini-2.5-flash-lite";
   
   const contextString = `
     [CURRENT MATH CONTEXT]

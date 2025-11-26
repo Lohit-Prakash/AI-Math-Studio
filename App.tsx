@@ -1,14 +1,14 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Calculator, Send, Sparkles, History, Trash2, ChevronRight, 
   ArrowRight, Info, Box, RotateCcw, Loader2, AlertCircle,
   Atom, Shapes, TrendingUp, Edit, Check, X, Code, Variable, Brain, 
   RefreshCw, Shuffle, AlertTriangle, FlaskConical, Sigma, Wrench, StopCircle,
-  Camera, Image as ImageIcon, Copy, FileCode, MessageSquare
+  Camera, Image as ImageIcon, Copy, FileCode, MessageSquare, FileText
 } from 'lucide-react';
 import { generateFormula, generateExplanation, syncFormula, generateCodeSnippets, sendChatMessage } from './services/gemini';
+import { generatePDFReport } from './utils/pdfGenerator';
 import { Visualizer } from './components/Visualizer';
 import { InputSection } from './components/InputSection';
 import { safeEvaluate } from './utils/math';
@@ -95,6 +95,7 @@ const surpriseQueries = [
 
 const App: React.FC = () => {
   const [view, setView] = useState<'home' | 'app'>('home');
+  const [triggerQuery, setTriggerQuery] = useState<string | null>(null);
 
   const [query, setQuery] = useState('');
   const [useThinking, setUseThinking] = useState(false);
@@ -157,6 +158,37 @@ const App: React.FC = () => {
 
   // Result Copy State
   const [isCopied, setIsCopied] = useState(false);
+
+  // --- PERSISTENCE ---
+  
+  // Load History from LocalStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('math_studio_history');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setHistory(parsed);
+        }
+      } catch (e) {
+        console.error("Failed to load history", e);
+      }
+    }
+  }, []);
+
+  // Save History to LocalStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('math_studio_history', JSON.stringify(history));
+  }, [history]);
+
+
+  // Handle triggered query from home page
+  useEffect(() => {
+    if (triggerQuery && view === 'app') {
+      handleGenerate(triggerQuery);
+      setTriggerQuery(null);
+    }
+  }, [triggerQuery, view]);
 
   // Calculate result whenever inputs or formula change
   useEffect(() => {
@@ -419,16 +451,25 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDownloadReport = () => {
+    if (formula && result) {
+      generatePDFReport(formula, inputs, result, explanation);
+    }
+  };
+
   const saveToHistory = () => {
     if (formula && result) {
-      setHistory(prev => [{
+      const newItem: HistoryItem = {
         id: Date.now(),
         timestamp: Date.now(),
         title: formula.title,
+        formulaData: formula, // Save full formula object
         inputs: { ...inputs },
         result: { ...result },
-        displayFormula: formula.displayFormula
-      }, ...prev]);
+        explanation: explanation, // Save explanation state
+        chatMessages: [...chatMessages] // Save chat history
+      };
+      setHistory(prev => [newItem, ...prev]);
     }
   };
 
@@ -511,7 +552,16 @@ const App: React.FC = () => {
 
   // --- Router View ---
   if (view === 'home') {
-    return <HomePage onLaunch={() => setView('app')} />;
+    return <HomePage 
+      onLaunch={() => setView('app')} 
+      onSelectQuery={(q) => {
+        setQuery(q);
+        setSelectedImage(null);
+        setImageFile(null);
+        setView('app');
+        setTriggerQuery(q); // Use trigger state instead of setTimeout
+      }}
+    />;
   }
 
   // --- Main App View ---
@@ -628,7 +678,7 @@ const App: React.FC = () => {
                   ref={fileInputRef} 
                   onChange={handleImageSelect} 
                   accept="image/*"
-                  capture="environment" 
+                  // capture="environment" // Allow gallery + camera
                   className="hidden" 
                 />
                 <button
@@ -1012,6 +1062,16 @@ const App: React.FC = () => {
                          <span>Code</span>
                        </button>
 
+                       {/* PDF Report Button */}
+                       <button 
+                        onClick={handleDownloadReport}
+                        className="flex-1 md:flex-none bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg flex items-center justify-center gap-2 transition-all border border-slate-700/50"
+                        title="Download PDF Report"
+                       >
+                         <FileText className="w-4 h-4" />
+                         <span>Report</span>
+                       </button>
+
                        <button 
                         onClick={handleExplain}
                         disabled={isExplaining}
@@ -1191,13 +1251,18 @@ const App: React.FC = () => {
                   onClick={() => {
                     // Load back into main view
                     if (formula?.title !== item.title) {
-                      // If different formula, simplistic reload (in real app would verify formula structure matches)
-                      setQuery(item.title); 
-                      // We set inputs but don't regenerate formula from API to save calls if we had full persistence
-                      // For now, we just update inputs, user might need to re-generate if formula structure changed
+                      setQuery(item.title);
+                      setFormula(item.formulaData); // Restore full formula object
                     }
-                    setInputs(item.inputs);
+                    setInputs(item.inputs); // Restore inputs
+                    setResult(item.result); // Restore result
+                    setExplanation(item.explanation); // Restore explanation
+                    setChatMessages(item.chatMessages || []); // Restore chat
+                    
+                    setView('app');
                     setIsSidebarOpen(false);
+                    setShowGhost(false); 
+                    setCodeSnippets(null);
                   }}
                   className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 hover:border-cyan-500/50 hover:bg-slate-800 transition-all cursor-pointer group"
                 >
